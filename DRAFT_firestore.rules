@@ -1,0 +1,110 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- PHASE 3: Primitives ---
+    
+    function isSignedIn() { return request.auth != null; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+    
+    // Auth tokens MUST have verified email for writes
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    // Role-Based Access: Check if user is a member of the family
+    function isFamilyMember(familyId) {
+      return isVerified() && 
+        exists(/databases/$(database)/documents/families/$(familyId)) &&
+        get(/databases/$(database)/documents/families/$(familyId)).data.members.hasAny([request.auth.uid]);
+    }
+
+    // --- PHASE 4: Entity Blueprints ---
+
+    // 1. Users
+    match /users/{userId} {
+      function isValidUser(data) {
+        return data.keys().hasAll(['uid', 'email', 'displayName', 'familyId']) &&
+               data.keys().size() == 4 &&
+               data.uid == request.auth.uid &&
+               data.email is string && data.email.size() <= 256;
+      }
+
+      allow get: if isSignedIn() && (request.auth.uid == userId);
+      allow create: if isVerified() && isValidUser(incoming());
+      allow update: if isVerified() && (request.auth.uid == userId) && 
+                      isValidUser(incoming()) && 
+                      incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'familyId', 'photoURL']);
+    }
+
+    // 2. Families
+    match /families/{familyId} {
+      function isValidFamily(data) {
+        return data.keys().hasAll(['name', 'createdBy', 'members', 'createdAt']) &&
+               data.name is string && data.name.size() <= 100 &&
+               data.members is list && data.members.size() <= 20 &&
+               data.createdAt == request.time;
+      }
+
+      allow get: if isFamilyMember(familyId);
+      allow create: if isVerified() && isValidFamily(incoming()) && incoming().createdBy == request.auth.uid;
+      allow update: if isFamilyMember(familyId) && isValidFamily(incoming()) &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['name', 'members']);
+    }
+
+    // 3. Nested Resources (Master Gate Pattern)
+    match /families/{familyId}/{collectionName}/{docId} {
+      
+      // All family sub-resources share this check
+      function isAuthorized() {
+        return isFamilyMember(familyId) && isValidId(docId);
+      }
+
+      // WALLETS
+      match /wallets/{walletId} {
+        function isValidWallet(data) {
+          return data.familyId == familyId &&
+                 data.monthlyBudget is number && data.monthlyBudget > 0 &&
+                 data.balance is number;
+        }
+        allow read: if isAuthorized();
+        allow create: if isAuthorized() && isValidWallet(incoming());
+        allow update: if isAuthorized() && isValidWallet(incoming()) &&
+                        incoming().diff(existing()).affectedKeys().hasOnly(['monthlyBudget', 'balance', 'currentMonth']);
+      }
+
+      // EXPENSES
+      match /expenses/{expenseId} {
+        function isValidExpense(data) {
+          return data.familyId == familyId &&
+                 data.amount is number && data.amount > 0 &&
+                 data.categoryId is string &&
+                 data.date == request.time; // Use request.time to enforce server reality
+        }
+        allow read: if isAuthorized();
+        allow create: if isAuthorized() && isValidExpense(incoming());
+        allow delete: if isAuthorized();
+      }
+
+      // MERCHANTS
+      match /merchants/{merchantId} {
+        function isValidMerchant(data) {
+          return data.familyId == familyId &&
+                 data.name is string && data.name.size() <= 100;
+        }
+        allow read: if isAuthorized();
+        allow create, update: if isAuthorized() && isValidMerchant(incoming());
+      }
+    }
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information and family association.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "familyId": { "type": "string" },
+        "photoURL": { "type": "string" }
+      },
+      "required": ["uid", "email"]
+    },
+    "Family": {
+      "title": "Family",
+      "description": "A family workspace shared by multiple users.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "members": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["name", "createdBy", "members"]
+    },
+    "Wallet": {
+      "title": "Wallet",
+      "description": "The financial status of a family workspace.",
+      "type": "object",
+      "properties": {
+        "familyId": { "type": "string" },
+        "monthlyBudget": { "type": "number" },
+        "balance": { "type": "number" },
+        "currentMonth": { "type": "string" }
+      },
+      "required": ["familyId", "monthlyBudget", "balance"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "A single spending record.",
+      "type": "object",
+      "properties": {
+        "familyId": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "subItem": { "type": "string" },
+        "amount": { "type": "number" },
+        "merchantId": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "notes": { "type": "string" }
+      },
+      "required": ["familyId", "categoryId", "amount", "date"]
+    },
+    "Merchant": {
+      "title": "Merchant",
+      "description": "A saved store or provider for expenses.",
+      "type": "object",
+      "properties": {
+        "familyId": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "stats": {
+          "type": "object",
+          "properties": {
+            "totalPurchases": { "type": "number" },
+            "totalSpent": { "type": "number" },
+            "lastPurchaseDate": { "type": "string", "format": "date-time" }
+          }
+        }
+      },
+      "required": ["familyId", "name"]
+    },
+    "ShoppingListItem": {
+      "title": "ShoppingListItem",
+      "description": "An item to be purchased in a specific shopping list.",
+      "type": "object",
+      "properties": {
+        "familyId": { "type": "string" },
+        "listType": { "type": "string", "enum": ["DAILY", "WEEKLY", "MONTHLY"] },
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "quantity": { "type": "number" },
+        "estimatedPrice": { "type": "number" },
+        "priority": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH"] },
+        "suggested": { "type": "boolean" },
+        "completed": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["familyId", "listType", "name", "completed"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Global user profiles."
+    },
+    "/families/{familyId}": {
+      "schema": "Family",
+      "description": "Root family documents."
+    },
+    "/families/{familyId}/wallets/{walletId}": {
+      "schema": "Wallet",
+      "description": "Wallet settings and balance per family."
+    },
+    "/families/{familyId}/merchants/{merchantId}": {
+      "schema": "Merchant",
+      "description": "Merchants associated with a family."
+    },
+    "/families/{familyId}/expenses/{expenseId}": {
+      "schema": "Expense",
+      "description": "Spending history per family."
+    },
+    "/families/{familyId}/shoppingItems/{itemId}": {
+      "schema": "ShoppingListItem",
+      "description": "Items in the family shopping lists."
+    }
+  }
+}

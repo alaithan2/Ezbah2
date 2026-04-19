@@ -1,0 +1,58 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --color-surface: #f8fafc;
+  --color-on-surface: #0f172a;
+  --color-primary: #047857;
+  --color-primary-dim: #065f46;
+  --color-primary-container: #ecfdf5;
+  --color-on-primary-container: #064e3b;
+  --color-secondary-container: #f1f5f9;
+  --color-on-secondary-container: #475569;
+  --color-tertiary-container: #eff6ff;
+  --color-on-tertiary-container: #1e40af;
+  --color-surface-container-low: #f1f5f9;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-high: #e2e8f0;
+  --color-outline-variant: #94a3b8;
+  --color-error: #e11d48;
+
+  --font-sans: "IBM Plex Sans Arabic", ui-sans-serif, system-ui, sans-serif;
+  --font-headline: "Plus Jakarta Sans", "IBM Plex Sans Arabic", sans-serif;
+  
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
+  --radius-3xl: 2rem;
+}
+
+@layer base {
+  html {
+    direction: rtl;
+    @apply antialiased font-sans overscroll-none;
+  }
+
+  body {
+    @apply font-sans selection:bg-primary/20 bg-surface text-on-surface min-h-screen overscroll-none;
+  }
+
+  h1, h2, h3, h4 {
+    @apply font-headline tracking-tight;
+  }
+}
+
+.editorial-shadow {
+  box-shadow: 0 20px 40px rgba(48, 51, 51, 0.06);
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
