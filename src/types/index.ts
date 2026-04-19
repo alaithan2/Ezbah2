@@ -23,7 +23,9 @@ export interface Wallet {
   familyId: string;
   monthlyBudget: number;
   balance: number;
-  currentMonth: string; // e.g., "2024-06"
+  currentMonth: string;
+  salaryDay: number; // day salary is deposited, default 27
+  categoryBudgets?: Record<string, number>; // categoryId -> budget limit
 }
 
 export interface Category {

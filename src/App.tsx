@@ -15,6 +15,8 @@ const NewExpense = React.lazy(() => import("./pages/NewExpense"));
 const Shopping = React.lazy(() => import("./pages/Shopping"));
 const Reports = React.lazy(() => import("./pages/Reports"));
 const More = React.lazy(() => import("./pages/More"));
+const ManageCategories = React.lazy(() => import("./pages/ManageCategories"));
+const ManageMerchants = React.lazy(() => import("./pages/ManageMerchants"));
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { user, loading } = useAuth();
@@ -89,6 +91,8 @@ const AnimatedRoutes = () => {
             path="/more" 
             element={<ProtectedRoute><PageWrapper><React.Suspense fallback={null}><More /></React.Suspense></PageWrapper></ProtectedRoute>} 
           />
+          <Route path="/more/categories" element={<ProtectedRoute><PageWrapper><React.Suspense fallback={null}><ManageCategories /></React.Suspense></PageWrapper></ProtectedRoute>} />
+          <Route path="/more/merchants"  element={<ProtectedRoute><PageWrapper><React.Suspense fallback={null}><ManageMerchants  /></React.Suspense></PageWrapper></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

@@ -1,142 +1,207 @@
 import React, { useEffect, useState } from "react";
-import { Plus, ShoppingCart, BarChart3, Store, ChevronLeft } from "lucide-react";
+import { Plus, ChevronLeft, AlertTriangle } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
-import { getWallet } from "../services/firestoreService";
-import { Wallet } from "../types";
+import { getWallet, getFamilyExpenses, getCategories } from "../services/firestoreService";
+import { Wallet, Expense, Category } from "../types";
 import { motion } from "motion/react";
 import { cn } from "../lib/utils";
+import { getCycleStart, getCycleEnd, getCycleLabel, getDaysRemaining, toDate } from "../utils/budgetCycle";
+import { format } from "date-fns";
+import { ar } from "date-fns/locale";
+
+const CATEGORY_EMOJI: Record<string, string> = {
+  food: "🍖", groceries: "🛒", utilities: "⚡", transport: "🚗",
+  education: "📚", health: "💊", occasions: "🎁", entertainment: "🎬", clothing: "👕",
+};
 
 export default function Dashboard() {
   const { user, family } = useAuth();
   const [wallet, setWallet] = useState<Wallet | null>(null);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
 
   useEffect(() => {
-    if (family?.id) {
-      return getWallet(family.id, setWallet);
-    }
+    if (!family?.id) return;
+    return getWallet(family.id, setWallet);
+  }, [family]);
+
+  useEffect(() => {
+    if (!family?.id) return;
+    const unsub = getFamilyExpenses(family.id, setExpenses);
+    getCategories(family.id).then(setCategories);
+    return unsub;
   }, [family]);
 
   if (!family) {
     return (
       <div className="px-6 flex flex-col items-center justify-center min-h-[80vh] text-center space-y-8 animate-in fade-in duration-700">
-        <div className="w-24 h-24 bg-primary/10 rounded-[2.5rem] flex items-center justify-center text-primary text-5xl shadow-inner">
-          🏘️
-        </div>
+        <div className="w-24 h-24 bg-primary/10 rounded-[2.5rem] flex items-center justify-center text-5xl shadow-inner">🏘️</div>
         <div className="space-y-3">
-          <h2 className="text-3xl font-bold font-headline text-on-surface">أهلاً بك في العزبة</h2>
-          <p className="text-on-surface-variant text-sm max-w-[280px]">
-            لم نجد أي ميزانية عائلية مرتبطة بحسابك. ابدأ الآن بإنشاء محفظة لعائلتك.
-          </p>
+          <h2 className="text-3xl font-bold font-headline">أهلاً بك في العزبة</h2>
+          <p className="text-on-surface-variant text-sm max-w-[280px]">لم نجد أي ميزانية مرتبطة بحسابك. ابدأ الآن.</p>
         </div>
-        <Link 
-          to="/more" 
-          className="w-full max-w-[240px] h-14 bg-primary text-white font-bold rounded-2xl flex items-center justify-center gap-3 shadow-lg shadow-primary/20 active:scale-95 transition-all text-sm"
-        >
-          <ChevronLeft size={18} />
-          إنشاء ميزانية عائلية
+        <Link to="/more" className="w-full max-w-[240px] h-14 bg-primary text-white font-bold rounded-2xl flex items-center justify-center gap-3 shadow-lg shadow-primary/20 active:scale-95 transition-all text-sm">
+          <ChevronLeft size={18} />إنشاء ميزانية
         </Link>
-        <p className="text-[10px] text-on-surface-variant/40 tracking-widest uppercase">
-          تحكم كامل في مصاريفك وخططك
-        </p>
       </div>
     );
   }
 
-  const spentPercentage = wallet ? Math.round(((wallet.monthlyBudget - wallet.balance) / wallet.monthlyBudget) * 100) : 0;
+  const salaryDay = wallet?.salaryDay ?? 27;
+  const cycleStart = getCycleStart(new Date(), salaryDay);
+  const cycleEnd = getCycleEnd(cycleStart);
+  const daysLeft = getDaysRemaining(cycleEnd);
+  const cycleLabel = getCycleLabel(cycleStart, cycleEnd);
+
+  // Filter expenses to current cycle
+  const cycleExpenses = expenses.filter(e => toDate(e.date) >= cycleStart);
+  const cycleTotal = cycleExpenses.reduce((sum, e) => sum + e.amount, 0);
+  const monthlyBudget = wallet?.monthlyBudget ?? 0;
+  const remainingBalance = monthlyBudget - cycleTotal;
+  const spentPct = monthlyBudget > 0 ? Math.min(100, Math.round((cycleTotal / monthlyBudget) * 100)) : 0;
+  const isWarning = spentPct >= 80;
+
+  // Today & week totals
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+  const weekStart = new Date(); weekStart.setDate(weekStart.getDate() - 7);
+  const todayTotal = cycleExpenses.filter(e => toDate(e.date) >= todayStart).reduce((s, e) => s + e.amount, 0);
+  const weekTotal  = cycleExpenses.filter(e => toDate(e.date) >= weekStart).reduce((s, e) => s + e.amount, 0);
+
+  // Top category this cycle
+  const catTotals = cycleExpenses.reduce((acc: Record<string, number>, e) => {
+    acc[e.categoryId] = (acc[e.categoryId] || 0) + e.amount;
+    return acc;
+  }, {});
+  const topCatId = Object.keys(catTotals).sort((a, b) => catTotals[b] - catTotals[a])[0];
+  const topCat = categories.find(c => c.id === topCatId);
+
+  // Category budget bars
+  const categoryBudgets = wallet?.categoryBudgets ?? {};
+  const catsWithBudget = categories.filter(c => categoryBudgets[c.id]);
+
+  const last3 = cycleExpenses.slice(0, 3);
 
   return (
-    <div className="px-6 space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      {/* Wallet Summary */}
-      <section className="mt-4 px-2">
-        <div className="relative overflow-hidden rounded-3xl p-7 bg-primary text-white shadow-lg shadow-primary/20">
-          <div className="relative z-10 flex flex-col justify-between h-[180px]">
-            <div>
-              <p className="text-primary-foreground/80 text-xs font-medium mb-1">رصيد المحفظة المتبقي</p>
-              <h2 className="text-5xl font-bold mt-2 font-headline">
-                {wallet?.balance.toLocaleString() || "0"} 
-                <span className="text-lg font-normal mr-2">ريال</span>
-              </h2>
+    <div className="px-6 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4 duration-500">
+
+      {/* Wallet Card */}
+      <section className="mt-4">
+        <div className={cn(
+          "relative overflow-hidden rounded-3xl p-7 text-white shadow-lg transition-colors",
+          isWarning ? "bg-gradient-to-br from-orange-500 to-red-500 shadow-red-500/20"
+                    : "bg-primary shadow-primary/20"
+        )}>
+          {isWarning && (
+            <div className="flex items-center gap-2 mb-3 bg-white/20 rounded-xl px-3 py-1.5 w-fit text-xs font-bold">
+              <AlertTriangle size={14} /> تجاوزت {spentPct}% من الميزانية
             </div>
-            <div className="mt-auto">
-              <div className="flex justify-between text-xs mb-3">
-                <span className="opacity-90">{spentPercentage}% من الميزانية مستخدم</span>
-                <span className="font-bold">المتبقي: {wallet?.balance.toLocaleString()} ر.س</span>
-              </div>
-              <div className="w-full h-2 bg-on-primary/20 rounded-full overflow-hidden">
-                <motion.div 
-                  initial={{ width: 0 }}
-                  animate={{ width: `${spentPercentage}%` }}
-                  className="h-full bg-white rounded-full transition-all duration-1000" 
-                />
-              </div>
-            </div>
+          )}
+          <p className="text-white/70 text-xs font-medium mb-1">المتبقي من الميزانية</p>
+          <h2 className="text-5xl font-bold font-headline mb-1">
+            {remainingBalance.toLocaleString()}
+            <span className="text-lg font-normal mr-2 opacity-80">ريال</span>
+          </h2>
+          <p className="text-white/60 text-xs mb-4">{cycleLabel}</p>
+          <div className="flex justify-between text-xs mb-2">
+            <span className="opacity-80">{spentPct}% مُنفق</span>
+            <span className="font-bold">{daysLeft} يوم متبقي</span>
+          </div>
+          <div className="w-full h-2 bg-white/20 rounded-full overflow-hidden">
+            <motion.div
+              initial={{ width: 0 }}
+              animate={{ width: `${spentPct}%` }}
+              transition={{ duration: 1 }}
+              className="h-full bg-white rounded-full"
+            />
           </div>
         </div>
       </section>
 
-      {/* Quick Stats Grid */}
-      <section className="grid grid-cols-3 gap-3 px-2">
+      {/* Quick Stats */}
+      <section className="grid grid-cols-3 gap-3">
         {[
-          { label: "مصروف اليوم", value: "142", icon: "🥩", color: "text-error" },
-          { label: "الأسبوع", value: "1,150", icon: "🥛", color: "text-on-surface" },
-          { label: "أعلى تصنيف", value: "المواد الغذائية", icon: "🧺", color: "text-primary" }
-        ].map((stat, i) => (
-          <div key={i} className="bg-surface-container-lowest p-4 rounded-2xl border border-surface-container-high shadow-sm flex flex-col items-center justify-center text-center">
-            <span className="text-[10px] text-on-surface-variant font-bold mb-1 uppercase spacing-wider">{stat.label}</span>
-            <span className={cn("text-sm font-bold truncate w-full", stat.color)}>
-              {stat.value} 
-              {i < 2 && <small className="text-[10px] opacity-60 mr-0.5"> ر.س</small>}
+          { label: "اليوم",    value: todayTotal,  suffix: "ر.س", color: "text-error"    },
+          { label: "الأسبوع",  value: weekTotal,   suffix: "ر.س", color: "text-on-surface" },
+          { label: "أعلى فئة", value: topCat?.name ?? "—", suffix: "", color: "text-primary" },
+        ].map((s, i) => (
+          <div key={i} className="bg-surface-container-lowest p-4 rounded-2xl border border-surface-container-high shadow-sm flex flex-col items-center text-center">
+            <span className="text-[10px] text-on-surface-variant font-bold mb-1 uppercase tracking-wider">{s.label}</span>
+            <span className={cn("text-sm font-bold truncate w-full", s.color)}>
+              {typeof s.value === "number" ? s.value.toLocaleString() : s.value}
+              {s.suffix && <small className="text-[10px] opacity-60 mr-0.5"> {s.suffix}</small>}
             </span>
           </div>
         ))}
       </section>
 
-      {/* Quick Actions GRID */}
-      <section className="px-2">
-        <div className="bg-surface-container-lowest border border-surface-container-high rounded-3xl p-6 shadow-sm">
-          <h3 className="text-lg font-bold mb-5 font-headline">إجراءات سريعة</h3>
-          <div className="grid grid-cols-2 gap-4">
-            <Link to="/expenses/new" className="flex flex-col items-center justify-center p-4 bg-surface-container-low border border-surface-container-high rounded-2xl hover:bg-primary-container transition-colors active:scale-95">
-              <div className="w-10 h-10 bg-primary-container text-on-primary-container rounded-full flex items-center justify-center mb-2 font-bold text-xl">+</div>
-              <span className="text-sm font-medium text-on-surface-variant">إضافة مصاريف</span>
-            </Link>
-            <Link to="/shopping" className="flex flex-col items-center justify-center p-4 bg-surface-container-low border border-surface-container-high rounded-2xl hover:bg-tertiary-container transition-colors active:scale-95">
-              <div className="w-10 h-10 bg-tertiary-container text-on-tertiary-container rounded-full flex items-center justify-center mb-2 text-xl">🛒</div>
-              <span className="text-sm font-medium text-on-surface-variant">قائمة تسوق</span>
-            </Link>
-            <Link to="/reports" className="flex flex-col items-center justify-center p-4 bg-surface-container-low border border-surface-container-high rounded-2xl hover:bg-secondary-container transition-colors active:scale-95">
-              <div className="w-10 h-10 bg-secondary-container text-on-secondary-container rounded-full flex items-center justify-center mb-2 text-xl">📊</div>
-              <span className="text-sm font-medium text-on-surface-variant">التقارير</span>
-            </Link>
-            <Link to="/more" className="flex flex-col items-center justify-center p-4 bg-surface-container-low border border-surface-container-high rounded-2xl hover:bg-surface-container-high transition-colors active:scale-95">
-              <div className="w-10 h-10 bg-surface-container-highest rounded-full flex items-center justify-center mb-2 text-xl">👥</div>
-              <span className="text-sm font-medium text-on-surface-variant">التجار</span>
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      {/* Smart Shopping Suggestions */}
-      <section className="px-2 space-y-4">
-        <div className="flex justify-between items-center mb-1">
-          <h3 className="text-lg font-bold font-headline">اقتراحات التسوق</h3>
-          <span className="text-[10px] bg-primary-container text-on-primary-container px-3 py-1 rounded-full border border-primary-dim/10 font-bold">بناءً على تاريخك</span>
-        </div>
-        <div className="space-y-3 bg-surface-container-lowest border border-surface-container-high rounded-3xl p-5 shadow-sm">
-          {[
-            { name: "خبز صامولي (كيس كبير)", price: "5.00", frequency: "كل يومين" },
-            { name: "حليب طازج (١ لتر)", price: "8.50", frequency: "كل ٣ أيام" }
-          ].map((item, i) => (
-            <div key={i} className="flex items-center gap-4 p-3 border border-dashed border-surface-container-high rounded-2xl bg-surface-container-low/30">
-              <div className="w-6 h-6 border-2 border-surface-container-high rounded-lg"></div>
-              <div className="flex-1">
-                <p className="text-sm font-bold">{item.name}</p>
-                <p className="text-[10px] text-on-surface-variant">معدل الاستهلاك: {item.frequency}</p>
+      {/* Category Budget Bars */}
+      {catsWithBudget.length > 0 && (
+        <section className="bg-surface-container-lowest border border-surface-container-high rounded-3xl p-5 shadow-sm space-y-4">
+          <h3 className="text-sm font-bold font-headline">ميزانية التصنيفات</h3>
+          {catsWithBudget.map(cat => {
+            const spent = catTotals[cat.id] || 0;
+            const budget = categoryBudgets[cat.id];
+            const pct = Math.min(100, Math.round((spent / budget) * 100));
+            return (
+              <div key={cat.id}>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="font-medium">{CATEGORY_EMOJI[cat.id] || "•"} {cat.name}</span>
+                  <span className={cn("font-bold", pct >= 90 ? "text-error" : pct >= 70 ? "text-orange-500" : "text-on-surface-variant")}>
+                    {spent.toLocaleString()} / {budget.toLocaleString()} ر.س
+                  </span>
+                </div>
+                <div className="w-full h-1.5 bg-surface-container rounded-full overflow-hidden">
+                  <div
+                    className={cn("h-full rounded-full transition-all duration-700", pct >= 90 ? "bg-error" : pct >= 70 ? "bg-orange-400" : "bg-primary")}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
               </div>
-              <span className="text-xs font-bold text-on-surface-variant">{item.price} ريال</span>
-            </div>
-          ))}
+            );
+          })}
+        </section>
+      )}
+
+      {/* Last 3 Expenses */}
+      {last3.length > 0 && (
+        <section className="space-y-3">
+          <div className="flex justify-between items-center px-1">
+            <h3 className="text-lg font-bold font-headline">آخر المصاريف</h3>
+            <Link to="/expenses" className="text-xs text-primary font-bold">عرض الكل</Link>
+          </div>
+          <div className="bg-surface-container-lowest border border-surface-container-high rounded-3xl divide-y divide-outline-variant/10 overflow-hidden shadow-sm">
+            {last3.map(exp => (
+              <div key={exp.id} className="p-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 bg-primary/10 rounded-xl flex items-center justify-center text-base">
+                    {CATEGORY_EMOJI[exp.categoryId] || "💸"}
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold">{exp.subItem}</p>
+                    <p className="text-[10px] text-on-surface-variant">
+                      {format(toDate(exp.date), "EEEE d MMM", { locale: ar })}
+                    </p>
+                  </div>
+                </div>
+                <p className="font-bold text-error">-{exp.amount.toLocaleString()} <small className="text-[9px]">ر.س</small></p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Quick Actions */}
+      <section>
+        <div className="grid grid-cols-2 gap-4">
+          <Link to="/expenses/new" className="flex flex-col items-center justify-center p-5 bg-primary text-white rounded-2xl shadow-lg shadow-primary/20 active:scale-95 transition-all">
+            <Plus size={28} className="mb-1" />
+            <span className="text-sm font-bold">إضافة مصروف</span>
+          </Link>
+          <Link to="/shopping" className="flex flex-col items-center justify-center p-5 bg-surface-container-lowest border border-surface-container-high rounded-2xl active:scale-95 transition-all shadow-sm">
+            <span className="text-2xl mb-1">🛒</span>
+            <span className="text-sm font-medium text-on-surface-variant">قائمة التسوق</span>
+          </Link>
         </div>
       </section>
     </div>

@@ -21,62 +21,59 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
-      try {
-        if (!fbUser) {
-          console.log("No user session found. Attempting automatic guest login...");
-          // Enable anonymous login so the user never sees a login/password screen
+      if (!fbUser) {
+        console.log("No user session found. Attempting automatic guest login...");
+        try {
           await signInAnonymously(auth);
-          return; // onAuthStateChanged will trigger again with the new guest user
+        } catch (err: any) {
+          console.error("Anonymous sign-in failed:", err.message);
+          setLoading(false);
+        }
+        return; // onAuthStateChanged will trigger again with the new guest user
+      }
+
+      try {
+        console.log("Auth Sync State: User is logged in", {
+          uid: fbUser.uid,
+          isAnonymous: fbUser.isAnonymous,
+          providerId: fbUser.providerId,
+          dbId: firebaseConfig.firestoreDatabaseId
+        });
+
+        const userPath = `users/${fbUser.uid}`;
+        console.log("Auth Sync: Fetching user profile from path:", userPath);
+
+        let userDoc;
+        try {
+          userDoc = await getDocFromServer(doc(db, "users", fbUser.uid));
+          console.log("Auth Sync: Fetch completed. Document exists:", userDoc.exists());
+        } catch (fetchError: any) {
+          console.error("Auth Sync: PERMISSION_DENIED on getDocFromServer at path", userPath, fetchError.code);
+          throw fetchError;
         }
 
-        if (fbUser) {
-          console.log("Auth Sync State: User is logged in", {
-            uid: fbUser.uid,
-            isAnonymous: fbUser.isAnonymous,
-            providerId: fbUser.providerId,
-            dbId: firebaseConfig.firestoreDatabaseId
-          });
-          
-          const userPath = `users/${fbUser.uid}`;
-          console.log("Auth Sync: Fetching user profile from path:", userPath);
+        let userData: User;
 
-          // Use getDocFromServer to bypass potential local cache permission issues
-          let userDoc;
+        if (!userDoc.exists()) {
+          console.log("Auth Sync: Creating new user profile for", fbUser.uid);
+          userData = {
+            uid: fbUser.uid,
+            email: fbUser.email || (fbUser.isAnonymous ? `guest_${fbUser.uid.substring(0, 5)}@ezbah.app` : "user@ezbah.app"),
+            displayName: fbUser.displayName || (fbUser.isAnonymous ? "Guest User" : "New User"),
+          };
           try {
-            userDoc = await getDocFromServer(doc(db, "users", fbUser.uid));
-            console.log("Auth Sync: Fetch completed. Document exists:", userDoc.exists());
-          } catch (fetchError: any) {
-            console.error("Auth Sync: PERMISSION_DENIED on getDocFromServer at path", userPath, {
-              code: fetchError.code,
-              message: fetchError.message,
-              stack: fetchError.stack
-            });
-            throw fetchError;
+            await setDoc(doc(db, "users", fbUser.uid), userData);
+            console.log("Auth Sync: Profile created successfully");
+          } catch (createError: any) {
+            console.error("Auth Sync: FAIL on setDoc for profile", createError.code, createError.message);
+            throw createError;
           }
-          
-          let userData: User;
-          
-          if (!userDoc.exists()) {
-            console.log("Auth Sync: Creating new user profile for", fbUser.uid);
-            userData = {
-              uid: fbUser.uid,
-              email: fbUser.email || (fbUser.isAnonymous ? `guest_${fbUser.uid.substring(0, 5)}@ezbah.app` : "user@ezbah.app"),
-              displayName: fbUser.displayName || (fbUser.isAnonymous ? "Guest User" : "New User"),
-            };
-            try {
-              await setDoc(doc(db, "users", fbUser.uid), userData);
-              console.log("Auth Sync: Profile created successfully");
-            } catch (createError: any) {
-              console.error("Auth Sync: FAIL on setDoc for profile", createError.code, createError.message);
-              throw createError;
-            }
-          } else {
-            userData = { uid: userDoc.id, ...userDoc.data() } as User;
-          }
+        } else {
+          userData = { uid: userDoc.id, ...userDoc.data() } as User;
+        }
 
         setUser(userData);
 
-        // Fetch family context
         if (userData.familyId) {
           try {
             const famDoc = await getDoc(doc(db, "families", userData.familyId));
@@ -90,8 +87,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             console.error("Family fetch permission error (Handled):", famError.code);
           }
         }
-      }
-    } catch (error: any) {
+      } catch (error: any) {
         console.error("Critical Auth Sync Error:", error.code, error.message);
         setUser(null);
         setFamily(null);

@@ -1,187 +1,205 @@
 import React, { useState, useEffect } from "react";
 import { useAuth } from "../hooks/useAuth";
-import { db } from "../lib/firebase";
-import { collection, query, where, getDocs, orderBy, Timestamp } from "firebase/firestore";
-import { Expense, Wallet } from "../types";
-import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from "recharts";
-import { FileText, Share2, TrendingUp, ChevronDown } from "lucide-react";
+import { getFamilyExpenses, getCategories } from "../services/firestoreService";
+import { Expense, Category, Wallet } from "../types";
+import { getWallet } from "../services/firestoreService";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
+import { FileText, Share2, TrendingUp, TrendingDown } from "lucide-react";
 import { jsPDF } from "jspdf";
 import "jspdf-autotable";
 import { motion } from "motion/react";
 import { cn } from "../lib/utils";
+import { getCycleStart, getCycleEnd, getCycleLabel, toDate } from "../utils/budgetCycle";
+import { format } from "date-fns";
+import { ar } from "date-fns/locale";
+
+type TabType = "CURRENT" | "PREVIOUS" | "THREE_MONTHS";
+
+const COLORS = ["#006a6a","#8dedec","#ffdcc3","#98fabe","#b4c5ff","#ffd6e0","#d4f7c5","#ffe4b5","#c8d8ff"];
+
+const CATEGORY_EMOJI: Record<string, string> = {
+  food: "🍖", groceries: "🛒", utilities: "⚡", transport: "🚗",
+  education: "📚", health: "💊", occasions: "🎁", entertainment: "🎬", clothing: "👕",
+};
+
+const formatDate = (v: any): string => {
+  try {
+    const d = toDate(v);
+    if (d.getTime() === 0) return "—";
+    return format(d, "d MMM yyyy", { locale: ar });
+  } catch { return "—"; }
+};
 
 export default function Reports() {
   const { family } = useAuth();
-  const [activeTab, setActiveTab] = useState("MONTHLY");
+  const [activeTab, setActiveTab] = useState<TabType>("CURRENT");
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [wallet, setWallet] = useState<Wallet | null>(null);
 
   useEffect(() => {
     if (!family?.id) return;
-    
-    // Fetch Wallet
-    const fetchWallet = async () => {
-      const q = query(collection(db, "wallets"), where("familyId", "==", family.id));
-      const snap = await getDocs(q);
-      if (!snap.empty) setWallet({ id: snap.docs[0].id, ...snap.docs[0].data() } as Wallet);
-    };
-    fetchWallet();
-
-    // Fetch Expenses
-    const fetchExpenses = async () => {
-      const q = query(
-        collection(db, "expenses"),
-        where("familyId", "==", family.id),
-        orderBy("date", "desc")
-      );
-      const snap = await getDocs(q);
-      setExpenses(snap.docs.map(d => ({ id: d.id, ...d.data() } as Expense)));
-    };
-    fetchExpenses();
+    const unsub1 = getFamilyExpenses(family.id, setExpenses);
+    const unsub2 = getWallet(family.id, setWallet);
+    getCategories(family.id).then(setCategories);
+    return () => { unsub1(); unsub2(); };
   }, [family]);
 
-  const categoryTotals = expenses.reduce((acc: any, curr) => {
-    acc[curr.categoryId] = (acc[curr.categoryId] || 0) + curr.amount;
-    return acc;
-  }, {});
+  const salaryDay = wallet?.salaryDay ?? 27;
+  const now = new Date();
 
-  const pieData = Object.keys(categoryTotals).map(catId => ({
-    name: catId === "cat1" ? "طعام" : catId === "cat2" ? "مقاضي" : "أخرى",
-    value: categoryTotals[catId]
-  }));
+  const currentCycleStart = getCycleStart(now, salaryDay);
+  const currentCycleEnd   = getCycleEnd(currentCycleStart);
+  const prevCycleStart    = getCycleStart(new Date(currentCycleStart.getTime() - 1), salaryDay);
+  const prevCycleEnd      = getCycleEnd(prevCycleStart);
+  const threeMonthsAgo    = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate());
 
-  const COLORS = ["#006a6a", "#8dedec", "#ffdcc3", "#98fabe"];
-
-  const generatePDF = () => {
-    const doc = new jsPDF("p", "mm", "a4");
-    doc.setFont("helvetica", "bold");
-    doc.text("Report - Al Ezbah", 105, 20, { align: "center" });
-    doc.setFontSize(10);
-    doc.text(`Family: ${family?.name}`, 20, 30);
-    doc.text(`Total Spent: ${expenses.reduce((a, b) => a + b.amount, 0)} SAR`, 20, 40);
-
-    const tableData = expenses.map(e => [
-      new Date(e.date.seconds * 1000).toLocaleDateString(),
-      e.amount.toString(),
-      e.subItem || "N/A"
-    ]);
-
-    (doc as any).autoTable({
-      head: [["Date", "Amount (SAR)", "Item"]],
-      body: tableData,
-      startY: 50
-    });
-
-    doc.save(`ezbah-report-${new Date().toISOString().split("T")[0]}.pdf`);
+  const filterExpenses = (): Expense[] => {
+    switch (activeTab) {
+      case "CURRENT":      return expenses.filter(e => { const d = toDate(e.date); return d >= currentCycleStart && d <= now; });
+      case "PREVIOUS":     return expenses.filter(e => { const d = toDate(e.date); return d >= prevCycleStart && d <= prevCycleEnd; });
+      case "THREE_MONTHS": return expenses.filter(e => toDate(e.date) >= threeMonthsAgo);
+    }
   };
 
-  const totalSpent = expenses.reduce((a, b) => a + b.amount, 0);
+  const filtered = filterExpenses();
+  const currentTotal  = expenses.filter(e => { const d = toDate(e.date); return d >= currentCycleStart && d <= now; }).reduce((s,e) => s + e.amount, 0);
+  const previousTotal = expenses.filter(e => { const d = toDate(e.date); return d >= prevCycleStart && d <= prevCycleEnd; }).reduce((s,e) => s + e.amount, 0);
+  const totalSpent = filtered.reduce((s, e) => s + e.amount, 0);
+
+  const diffPct = previousTotal > 0 ? Math.round(((currentTotal - previousTotal) / previousTotal) * 100) : 0;
+  const isMore  = diffPct > 0;
+
+  // Category breakdown for pie
+  const catTotals = filtered.reduce((acc: Record<string, number>, e) => {
+    acc[e.categoryId] = (acc[e.categoryId] || 0) + e.amount;
+    return acc;
+  }, {});
+  const pieData = Object.entries(catTotals).map(([catId, value]) => ({
+    name: categories.find(c => c.id === catId)?.name ?? catId,
+    value,
+    emoji: CATEGORY_EMOJI[catId] || "💸",
+  })).sort((a, b) => b.value - a.value);
+
+  const generatePDF = () => {
+    try {
+      const pdfDoc = new jsPDF("p", "mm", "a4");
+      pdfDoc.setFont("helvetica", "bold");
+      pdfDoc.text("Al Ezbah - Budget Report", 105, 20, { align: "center" });
+      pdfDoc.setFontSize(10);
+      pdfDoc.text(`Family: ${family?.name ?? ""}`, 20, 30);
+      pdfDoc.text(`Total: ${totalSpent.toLocaleString()} SAR`, 20, 40);
+
+      const tableData = filtered.map(e => [
+        formatDate(e.date),
+        categories.find(c => c.id === e.categoryId)?.name ?? e.categoryId,
+        e.subItem,
+        `${e.amount.toLocaleString()} SAR`,
+      ]);
+
+      (pdfDoc as any).autoTable({
+        head: [["Date", "Category", "Item", "Amount"]],
+        body: tableData, startY: 50,
+      });
+
+      pdfDoc.save(`ezbah-${new Date().toISOString().split("T")[0]}.pdf`);
+    } catch (err) { console.error("PDF error", err); }
+  };
+
+  const tabLabel = (t: TabType) =>
+    t === "CURRENT" ? `هذا الشهر (${getCycleLabel(currentCycleStart, currentCycleEnd)})` :
+    t === "PREVIOUS" ? `الشهر الماضي` : "آخر 3 أشهر";
 
   return (
-    <div className="px-6 space-y-8 pb-12 animate-in fade-in duration-500">
+    <div className="px-6 space-y-6 pb-12 animate-in fade-in duration-500">
       <div className="pt-8 flex justify-between items-center">
         <div>
           <h2 className="text-4xl font-black font-headline mb-2">التقارير</h2>
-          <p className="text-on-surface-variant">تحليل شامل لنفقات العائلة</p>
-        </div>
-        <div className="flex gap-2">
-            <button className="p-3 bg-surface-container-low rounded-2xl text-primary"><Share2 size={20} /></button>
+          <p className="text-on-surface-variant text-sm">تحليل مصاريف العائلة</p>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex p-1.5 bg-surface-container-low rounded-2xl mb-8">
-        {["DAILY", "WEEKLY", "MONTHLY"].map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={cn(
-              "flex-1 py-3 text-center rounded-xl font-bold transition-all",
-              activeTab === tab ? "bg-surface-container-lowest text-primary shadow-sm scale-[1.02]" : "text-on-surface-variant"
-            )}
-          >
-            {tab === "DAILY" ? "يومي" : tab === "WEEKLY" ? "أسبوعي" : "شهري"}
+      <div className="flex p-1.5 bg-surface-container-low rounded-2xl gap-1">
+        {(["CURRENT","PREVIOUS","THREE_MONTHS"] as TabType[]).map(tab => (
+          <button key={tab} onClick={() => setActiveTab(tab)}
+            className={cn("flex-1 py-3 text-center rounded-xl font-bold transition-all text-xs",
+              activeTab === tab ? "bg-surface-container-lowest text-primary shadow-sm" : "text-on-surface-variant")}>
+            {tab === "CURRENT" ? "هذا الشهر" : tab === "PREVIOUS" ? "الشهر الماضي" : "٣ أشهر"}
           </button>
         ))}
       </div>
 
       {/* Total Card */}
-      <div className="relative overflow-hidden bg-gradient-to-br from-primary to-primary-dim rounded-3xl p-10 text-white editorial-shadow">
-        <div className="relative z-10 flex flex-col items-center">
-          <p className="text-white/70 text-sm font-medium mb-2">إجمالي المصاريف هذا الشهر</p>
-          <div className="flex items-baseline gap-2">
-             <h2 className="text-5xl font-extrabold tracking-tight">{totalSpent.toLocaleString()}</h2>
-             <span className="text-xl opacity-60">ر.س</span>
+      <div className="relative overflow-hidden bg-gradient-to-br from-primary to-primary-dim rounded-3xl p-8 text-white shadow-lg shadow-primary/20">
+        <p className="text-white/70 text-sm mb-1">{tabLabel(activeTab)}</p>
+        <h2 className="text-5xl font-extrabold tracking-tight mb-4">{totalSpent.toLocaleString()} <span className="text-xl opacity-60">ر.س</span></h2>
+
+        {activeTab === "CURRENT" && previousTotal > 0 && (
+          <div className="flex items-center gap-2 bg-white/10 px-4 py-2 rounded-full w-fit text-xs font-bold ring-1 ring-white/20">
+            {isMore ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+            <span>{Math.abs(diffPct)}% {isMore ? "أكثر" : "أقل"} من الشهر الماضي ({previousTotal.toLocaleString()} ر.س)</span>
           </div>
-          <div className="flex items-center gap-2 mt-6 bg-white/10 px-4 py-2 rounded-full text-xs font-bold ring-1 ring-white/20">
-            <TrendingUp size={16} />
-            <span>12% أكثر من الشهر الماضي</span>
-          </div>
-        </div>
-        <div className="absolute -right-12 -top-12 w-48 h-48 bg-white/10 rounded-full blur-[80px]"></div>
+        )}
+        <div className="absolute -right-12 -top-12 w-48 h-48 bg-white/10 rounded-full blur-[80px]" />
       </div>
 
-      {/* Analytics Chart */}
-      <section className="space-y-4">
-        <h3 className="text-xl font-bold font-headline">توزيع المصاريف</h3>
-        <div className="bg-surface-container-low h-64 rounded-3xl flex items-center justify-center p-4">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={pieData.length > 0 ? pieData : [{ name: "لا توجد بيانات", value: 1 }]}
-                cx="50%"
-                cy="50%"
-                innerRadius={60}
-                outerRadius={80}
-                paddingAngle={5}
-                dataKey="value"
-              >
-                {pieData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-      </section>
-
-      {/* Top Items Table-style */}
-      <section className="space-y-4">
-        <div className="flex justify-between items-center px-1">
-          <h3 className="text-xl font-bold font-headline">الأكثر طلباً</h3>
-          <span className="text-primary text-sm font-bold">عرض الكل</span>
-        </div>
-        <div className="bg-surface-container-lowest rounded-3xl divide-y divide-outline-variant/10 overflow-hidden border border-outline-variant/10 editorial-shadow">
-          {expenses.slice(0, 3).map((exp, i) => (
-            <div key={i} className="p-5 flex items-center justify-between hover:bg-surface-container-low transition-all">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-2xl bg-surface-container overflow-hidden">
-                  <img src={`https://picsum.photos/seed/${exp.subItem}/100/100`} alt="item" className="w-full h-full object-cover" />
-                </div>
-                <div>
-                  <p className="font-bold text-sm">{exp.subItem}</p>
-                  <p className="text-xs text-on-surface-variant mt-1">عدد المرات: ٥</p>
-                </div>
+      {/* Pie Chart */}
+      {pieData.length > 0 && (
+        <section className="space-y-4">
+          <h3 className="text-xl font-bold font-headline">توزيع المصاريف</h3>
+          <div className="bg-surface-container-low h-56 rounded-3xl flex items-center justify-center p-4">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={pieData} cx="50%" cy="50%" innerRadius={55} outerRadius={80} paddingAngle={4} dataKey="value">
+                  {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                </Pie>
+                <Tooltip formatter={(v: any) => [`${v.toLocaleString()} ر.س`]} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          {/* Legend */}
+          <div className="grid grid-cols-2 gap-2">
+            {pieData.map((item, i) => (
+              <div key={i} className="flex items-center gap-2 text-xs">
+                <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
+                <span className="truncate text-on-surface-variant">{item.emoji} {item.name}</span>
+                <span className="font-bold text-on-surface mr-auto">{item.value.toLocaleString()}</span>
               </div>
-              <p className="font-black text-primary">{exp.amount} <small className="text-[10px]">ر.س</small></p>
-            </div>
-          ))}
-        </div>
-      </section>
+            ))}
+          </div>
+        </section>
+      )}
 
-      {/* Export Action */}
+      {/* Top Expenses */}
+      {filtered.length > 0 && (
+        <section className="space-y-3">
+          <h3 className="text-xl font-bold font-headline">أعلى المصاريف</h3>
+          <div className="bg-surface-container-lowest rounded-3xl divide-y divide-outline-variant/10 overflow-hidden border border-outline-variant/10 shadow-sm">
+            {filtered.slice(0, 5).map((exp, i) => (
+              <div key={i} className="p-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="text-xl">{CATEGORY_EMOJI[exp.categoryId] || "💸"}</span>
+                  <div>
+                    <p className="font-bold text-sm">{exp.subItem}</p>
+                    <p className="text-xs text-on-surface-variant">{formatDate(exp.date)}</p>
+                  </div>
+                </div>
+                <p className="font-black text-error">{exp.amount.toLocaleString()} <small className="text-[10px]">ر.س</small></p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Export */}
       <div className="grid grid-cols-2 gap-4">
-        <button 
-          onClick={generatePDF}
-          className="bg-surface-container-high text-on-surface font-bold py-5 px-6 rounded-3xl flex items-center justify-center gap-3 active:scale-95 transition-all"
-        >
-          <FileText size={20} />
-          تصدير PDF
+        <button onClick={generatePDF}
+          className="bg-surface-container-high text-on-surface font-bold py-5 px-6 rounded-3xl flex items-center justify-center gap-3 active:scale-95 transition-all">
+          <FileText size={20} /> تصدير PDF
         </button>
-        <button className="bg-gradient-to-r from-primary to-primary-dim text-white font-bold py-5 px-6 rounded-3xl flex items-center justify-center gap-3 editorial-shadow active:scale-95 transition-all">
-          <Share2 size={20} />
-          مشاركة
+        <button className="bg-gradient-to-r from-primary to-primary-dim text-white font-bold py-5 px-6 rounded-3xl flex items-center justify-center gap-3 active:scale-95 transition-all shadow-lg shadow-primary/20">
+          <Share2 size={20} /> مشاركة
         </button>
       </div>
     </div>
